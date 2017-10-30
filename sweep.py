@@ -1,11 +1,10 @@
 import numpy as np
 import copy
-import itertools
 import os
 
 DEFAULTS = {
     'SWEEP_TYPE': 'exp',
-    'SWEEP_NUM': 10,
+    'SWEEP_NUM': 5,
 }
 
 class Sweeper(object):
