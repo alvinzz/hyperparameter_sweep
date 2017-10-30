@@ -5,6 +5,7 @@ import os
 DEFAULTS = {
     'SWEEP_TYPE': 'exp',
     'SWEEP_NUM': 5,
+    'SQUEEZE_FACTOR': 0.8,
 }
 
 class Sweeper(object):
@@ -31,15 +32,15 @@ class Sweeper(object):
                     distributed according to sweep_type)
                 - in random sweep, we use this to calculate how many values to
                     sample
+         squeeze_factor (for type=='continuous' only) is:
+            a float
+                - how much to shrink the search range after each iteration
+
 
         model_create_fn should create a Model with desired parameters,
         WHERE:
             we can call Model.train() and Model.eval() on a predefined dataset
                 - Model.eval() should return the loss
-
-        squeeze_factor is:
-            a float
-                - how much to shrink the search range after each iteration
 
         top_n is:
             a float
@@ -50,10 +51,17 @@ class Sweeper(object):
             a string
                 - path to file to write log to
     """
-    def __init__(self, param_dict, model_create_fn,  log_file='sweep_log.txt', squeeze_factor=0.8, top_n=0.2):
+    def __init__(self, param_dict, model_create_fn,  log_file='sweep_log.txt', top_n=0.2):
         self.param_dict = param_dict
+        for param, vals in filter(lambda kv: kv[1]['type'] == 'continuous', self.param_dict.items()):
+            if 'squeeze_factor' not in vals:
+                self.param_dict[param]['squeeze_factor'] = DEFAULTS['SQUEEZE_FACTOR']
+            if 'sweep_type' not in vals:
+                self.param_dict[param]['sweep_type'] = DEFAULTS['SWEEP_TYPE']
+            if 'sweep_num' not in vals:
+                self.param_dict[param]['sweep_num'] = DEFAULTS['SWEEP_NUM']
+                
         self.model_create_fn = model_create_fn
-        self.squeeze_factor = squeeze_factor
         self.top_n = top_n
         while os.path.isfile(log_file):
             overwrite = input("Log file '{}' already exists. Overwrite? [y/N] ".format(log_file))
@@ -100,6 +108,8 @@ class Sweeper(object):
                     combs.append(comb)
         else:
             combs = self._get_discrete_combs()
+        print('\n\n\nStarting sweep, {} combinations'.format(len(combs)))
+        print('Continuous ranges for this iteration are: \n{}'.format(continuous_ranges))
 
         # collect and log results
         thisResults = {}
@@ -123,28 +133,25 @@ class Sweeper(object):
                 mean = np.mean([comb[param] for comb in combs])
                 span = continuous_ranges[param][1] - continuous_ranges[param][0]
                 continuous_ranges[param] = [
-                    max(1e-12, mean - span/2.*self.squeeze_factor),
-                    mean + span/2.*self.squeeze_factor
+                    max(1e-12, mean - span/2.*self.param_dict[param]['squeeze_factor']),
+                    mean + span/2.*self.param_dict[param]['squeeze_factor']
                 ]
-                #print(param, self.param_dict[param]['range'])
             elif self.param_dict[param]['sweep_type'] == 'exp':
                 #var = np.var([np.log(comb[param+'discrete']) for comb in combs])
                 mean = np.mean([np.log(comb[param]) for comb in combs])
                 span = np.log(continuous_ranges[param][1]) - np.log(continuous_ranges[param][0])
                 continuous_ranges[param] = [
-                    max(1e-12, np.exp(mean - span/2.*self.squeeze_factor)),
-                    np.exp(mean + span/2.*self.squeeze_factor)
+                    max(1e-12, np.exp(mean - span/2.*self.param_dict[param]['squeeze_factor'])),
+                    np.exp(mean + span/2.*self.param_dict[param]['squeeze_factor'])
                 ]
-                #print(param, self.param_dict[param]['range'])
             elif self.param_dict[param]['sweep_type'] == 'log':
                 #var = np.var([np.exp(comb[param+'discrete']) for comb in combs])
                 mean = np.mean([np.exp(comb[param]) for comb in combs])
                 span = np.exp(continuous_ranges[param][1]) - np.exp(continuous_ranges[param][0])
                 continuous_ranges[param] = [
-                    max(1e-12, np.log(mean - span/2.*self.squeeze_factor)),
-                    np.log(mean + span/2.*self.squeeze_factor)
+                    max(1e-12, np.log(mean - span/2.*self.param_dict[param]['squeeze_factor'])),
+                    np.log(mean + span/2.*self.param_dict[param]['squeeze_factor'])
                 ]
-                #print(param, self.param_dict[param]['range'])
         return self.sweep(continuous_ranges=continuous_ranges, num_iters=num_iters-1, method=method, results=results)
 
     def _get_discrete_combs(self):
@@ -163,15 +170,8 @@ class Sweeper(object):
     def _discretize_continuous(self, continuous_ranges):
         combs = [{}]
         for param, param_range in continuous_ranges.items():
-            try:
-                sweep_type = self.param_dict[param]['sweep_type']
-            except:
-                sweep_type = DEFAULTS['SWEEP_TYPE']
-            try:
-                sweep_num = self.param_dict[param]['sweep_num']
-            except:
-                sweep_num = DEFAULTS['SWEEP_NUM']
-
+            sweep_type = self.param_dict[param]['sweep_type']
+            sweep_num = self.param_dict[param]['sweep_num']
             if sweep_type == 'linear':
                 param_range = np.linspace(param_range[0], param_range[1], num=sweep_num, endpoint=True).tolist()
             elif sweep_type == 'exp':
@@ -192,18 +192,11 @@ class Sweeper(object):
         samples = {}
         num_samples = 1
         for param, vals in filter(lambda kv: kv[1]['type'] == 'continuous', self.param_dict.items()):
-            try:
-                sweep_num = self.param_dict[param]['sweep_num']
-            except:
-                sweep_num = DEFAULTS['SWEEP_NUM']
+            sweep_num = self.param_dict[param]['sweep_num']
             num_samples *= sweep_num
 
         for param, param_range in continuous_ranges.items():
-            try:
-                sweep_type = self.param_dict[param]['sweep_type']
-            except:
-                sweep_type = DEFAULTS['SWEEP_TYPE']
-
+            sweep_type = self.param_dict[param]['sweep_type']
             if sweep_type == 'linear':
                 span = param_range[1] - param_range[0]
                 k = span / float(sweep_num - 1)
@@ -221,34 +214,3 @@ class Sweeper(object):
         for i in range(num_samples):
             res.append({param: vals[i] for param, vals in samples.items()})
         return res
-
-class Model():
-    def __init__(self, params):
-        self.params = params
-        self.targets = {
-            'a': 4,
-            'b': 3.5,
-            'c': 10**-1.2,
-            'd': 10**-3.7,
-            'e': 10**-3.7,
-            'f': 5,
-        }
-    def train(self):
-        pass
-
-    def eval(self):
-        return sum([abs(self.params[k] / self.targets[k] - 1) for k in self.params.keys()])
-
-if __name__ == '__main__':
-    params = {
-                'a': {'type': 'discrete', 'range': [4,5,6]},
-                'b': {'type': 'continuous', 'range': [1, 5], 'sweep_type': 'linear', 'sweep_num': 5},
-                'c': {'type': 'continuous', 'range': [1e-2, 1], 'sweep_type': 'exp', 'sweep_num': 5},
-                'd': {'type': 'continuous', 'range': [1e-4, 1e-2], 'sweep_type': 'exp', 'sweep_num': 5},
-                'e': {'type': 'continuous', 'range': [1e-4, 1e-2], 'sweep_type': 'log', 'sweep_num': 5},
-                'f': {'type': 'discrete', 'range': [4,5,6]},
-                }
-    s = Sweeper(params, Model)
-    print('targs:', sorted(Model(None).targets.items()))
-    print('best, random:', s.random_sweep(num_iters=10))
-    print('best, grid:', s.grid_sweep(num_iters=10))
