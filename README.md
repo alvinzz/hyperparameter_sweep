@@ -2,6 +2,7 @@
 ### Usage:
 - Create a Sweeper() instance from sweep.py
 - Takes the following parameters:
+
 param_dict should contain entries of the form:
     {param_name: {type, range, sweep_type, sweep_num}},
     WHERE:
